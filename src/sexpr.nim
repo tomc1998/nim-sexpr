@@ -15,6 +15,8 @@ type
     skString
     skSym
   Sexpr* = object
+    line: int
+    col: int
     case kind*: SexprKind
     of skList: listVal*: seq[Sexpr]
     of skInt: intVal*: int64
@@ -63,12 +65,12 @@ proc parseNumber(input: Stream): Sexpr =
       numPoints += 1
     else: break
     let _ = input.readChar
-  if numPoints > 0: return Sexpr(kind: skFloat, floatVal: buf.parseFloat)
+  if numPoints > 0: return Sexpr(line: 0, col: 0, kind: skFloat, floatVal: buf.parseFloat)
   elif numTy == ntHex:
-    return Sexpr(kind: skInt, intVal: buf.parseHexInt)
+    return Sexpr(line: 0, col: 0, kind: skInt, intVal: buf.parseHexInt)
   elif numTy == ntBin:
-    return Sexpr(kind: skInt, intVal: buf.parseBinInt)
-  else: return Sexpr(kind: skInt, intVal: buf.parseInt)
+    return Sexpr(line: 0, col: 0, kind: skInt, intVal: buf.parseBinInt)
+  else: return Sexpr(line: 0, col: 0, kind: skInt, intVal: buf.parseInt)
 
 proc parseList(input: Stream): Sexpr =
   assert input.readChar() == '('
@@ -82,7 +84,7 @@ proc parseList(input: Stream): Sexpr =
       if res.isNone: raise newException(UnbalancedParensError, "Not enough closing parens")
       sexprs.add(res.get)
   assert input.readChar == ')'
-  return Sexpr(kind: skList, listVal: sexprs)
+  return Sexpr(line: 0, col: 0, kind: skList, listVal: sexprs)
 
 proc parseSym(input: Stream): Sexpr =
   var buf = ""
@@ -92,7 +94,7 @@ proc parseSym(input: Stream): Sexpr =
     of IdentChars: buf.add(currChar)
     else: break
     let _ = input.readChar
-  return Sexpr(kind: skSym, symVal: buf)
+  return Sexpr(line: 0, col: 0, kind: skSym, symVal: buf)
 
 proc parseString(input: Stream): Sexpr =
   assert input.readChar() == '"'
@@ -104,7 +106,7 @@ proc parseString(input: Stream): Sexpr =
     of '"': break
     else: buf.add(currChar)
     let _ = input.readChar
-  return Sexpr(kind: skString, stringVal: buf)
+  return Sexpr(line: 0, col: 0, kind: skString, stringVal: buf)
 
 ## Returns none if the input stream is empty
 proc parse*(input: Stream): Option[Sexpr] =
