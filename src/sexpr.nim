@@ -37,20 +37,22 @@ proc parseNumber(input: Stream): Sexpr =
   var buf = ""
   var numPoints = 0
 
-  var prefix : array[2, char]
-  input.peek(prefix)
+
   type NumTy = enum
     ntDec
     ntHex
     ntBin
-
   var numTy = ntDec
-  if prefix == ['0', 'x']:
-    numTy = ntHex
-    input.setPosition(input.getPosition + 2)
-  if prefix == ['0', 'b']:
-    numTy = ntBin
-    input.setPosition(input.getPosition + 2)
+  var prefix : array[2, char]
+  try:
+    input.peek(prefix)
+    if prefix == ['0', 'x']:
+      numTy = ntHex
+      input.setPosition(input.getPosition + 2)
+    if prefix == ['0', 'b']:
+      numTy = ntBin
+      input.setPosition(input.getPosition + 2)
+  except IOError: discard
 
   while true:
     let currChar = input.peekChar

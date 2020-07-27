@@ -3,6 +3,11 @@ import options
 import streams
 
 block:
+  let res = parse(newStringStream("1")).get
+  assert res.kind == skInt
+  assert res.intVal == 1
+
+block:
   let res = parse(newStringStream("123")).get
   assert res.kind == skInt
   assert res.intVal == 123
