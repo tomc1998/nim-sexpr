@@ -15,8 +15,8 @@ type
     skString
     skSym
   Sexpr* = object
-    line: int
-    col: int
+    line*: int
+    col*: int
     case kind*: SexprKind
     of skList: listVal*: seq[Sexpr]
     of skInt: intVal*: int64
