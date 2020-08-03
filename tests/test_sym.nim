@@ -20,3 +20,13 @@ block:
 block:
   let res = parse(newStringStream("123abc")).get
   assert res.kind != skSym
+
+block:
+  let res = parse(newStringStream("a.b")).get
+  assert res.kind == skSym
+  assert res.symVal == "a.b"
+
+block:
+  let res = parse(newStringStream("a.b"), initParseOptions().withForceSplitChar('.')).get
+  assert res.kind == skSym
+  assert res.symVal == "a"
