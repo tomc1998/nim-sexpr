@@ -6,7 +6,7 @@ import strutils
 import strformat
 
 const IdentStartChars =
-  strutils.IdentStartChars + {'+', '-', '*', '/', ';', '>', '<', '=', '!', '$', '%', '^', '?', '.', '\''}
+  strutils.IdentStartChars + {'+', '-', '*', '/', ';', ':', '`', '>', '<', '=', '!', '$', '%', '^', '?', '.', '\''}
 const IdentChars = IdentStartChars + Digits
 
 type 
