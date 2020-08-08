@@ -32,6 +32,16 @@ type
     of skString: stringVal*: string
     of skSym: symVal*: string
 
+proc toReadable*(s: Sexpr): string =
+  case s.kind
+  of skInt: repr s.intVal
+  of skFloat: repr s.floatVal
+  of skString: "\""&s.stringVal&"\""
+  of skSym: s.symVal
+  of skList:
+    let listItems = s.listVal.map(toReadable).join(" ")
+    fmt"({listItems})"
+
 proc `==`*(a: Sexpr, b: Sexpr): bool =
   if a.kind != b.kind: return false
   case a.kind
