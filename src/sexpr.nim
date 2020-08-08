@@ -16,6 +16,13 @@ type
     ## symbols, `foo`, `.`, `bar` - whereas without '.' being present, this
     ## will be parsed as a single symbol - `foo.bar`.
     forceSplitChars: HashSet[char]
+    ## For each char in this set, convert foo # bar (where '#' is the char in
+    ## this case) to (# foo bar).
+    ## This is left-associative, so foo # bar # baz == (# (# foo bar) baz).
+    ## This is useful for 'dot-notation' syntax, e.g. 'foo.bar.baz'.
+    ## It is implied that a character in this set is a 'force split char' - it
+    ## does *not* need to be specified in forceSplitChars as well.
+    binaryOpChars: HashSet[char]
   SexprKind* = enum
     skList
     skInt
@@ -51,14 +58,24 @@ proc `==`*(a: Sexpr, b: Sexpr): bool =
   of skSym: a.symVal == b.symVal
   of skList: a.listVal == b.listVal
 
-type UnbalancedParensError = object of CatchableError
-type UnexpectedCharacterError = object of CatchableError
+type UnbalancedParensError* = object of CatchableError
+type UnexpectedCharacterError* = object of CatchableError
+## For when a char in binaryOpChars is not followed by a valid sexpr
+type IncompleteBinaryOpError* = object of CatchableError
 
 proc initParseOptions*(): ParseOptions = ParseOptions(forceSplitChars: initHashSet[char]())
 proc withForceSplitChar*(p: ParseOptions, c: char): ParseOptions =
   var p = p
   p.forceSplitChars.incl(c)
   p
+proc withBinaryOpChar*(p: ParseOptions, c: char): ParseOptions =
+  var p = p
+  p.binaryOpChars.incl(c)
+  p
+## Return true if we should split on this char with the given parse options
+proc shouldSplitOn(p: ParseOptions, c: char): bool =
+  p.forceSplitChars.contains(c) or p.binaryOpChars.contains(c)
+
 
 proc parse*(input: Stream, opt: ParseOptions): Option[Sexpr]
 
@@ -125,8 +142,8 @@ proc parseSym(input: Stream, opt: ParseOptions): Sexpr =
     let currChar = input.peekChar
     case currChar
     of IdentChars:
-      ## Split if this is in the forceSplitChars set & we've already got some chars in the buf
-      let splitChar = opt.forceSplitChars.contains(currChar)
+      ## Check if we should split here
+      let splitChar = opt.shouldSplitOn(currChar)
       if splitChar and buf.len > 0: break
       elif splitChar: # Just consume the single force split char
         buf.add(input.readChar)
@@ -154,17 +171,43 @@ proc parseString(input: Stream, opt: ParseOptions): Sexpr =
     let _ = input.readChar
   return Sexpr(line: 0, col: 0, kind: skString, stringVal: buf)
 
+## Peeks the next char after whitespace, if it's a binary op char, then wrap up
+## lhs and return a listVal (# lhs rhs).
+proc tryBinop(input: Stream, opt: ParseOptions, lhs: Sexpr): Option[Sexpr] =
+  consumeWhitespace(input, opt)
+  let peek = input.peekChar
+  if opt.binaryOpChars.contains(peek):
+    let _ = input.readChar
+    ## Consume more here and return a (# a b) instead of a # b
+    consumeWhitespace(input, opt)
+    let rhs = parse(input, opt)
+    if rhs.isNone:
+      raise newException(IncompleteBinaryOpError,
+        fmt"Expected value to complete the binary expression with operator '{peek}'")
+    return some(Sexpr(line: 0, col: 0, kind: skList, listVal: @[
+      Sexpr(line: 0, col: 0, kind: skSym, symVal: $peek),
+      lhs,
+      rhs.get]))
+  return none(Sexpr)
+
 ## Returns none if the input stream is empty
 proc parse*(input: Stream, opt: ParseOptions): Option[Sexpr] =
   consumeWhitespace(input, opt)
-  case input.peekChar()
-  of '\0': return none(Sexpr)
-  of '(': return some(parseList(input, opt))
-  of Digits: return some(parseNumber(input, opt))
-  of '"': return some(parseString(input, opt))
-  of ')': raise newException(UnbalancedParensError, "Too many closing parens")
-  of IdentStartChars: return some(parseSym(input, opt))
-  else: raise newException(UnexpectedCharacterError, fmt"Unexpected character {input.peekChar()}")
+  var ret =
+    case input.peekChar()
+      of '\0': none(Sexpr)
+      of '(': some(parseList(input, opt))
+      of Digits: some(parseNumber(input, opt))
+      of '"': some(parseString(input, opt))
+      of ')': raise newException(UnbalancedParensError, "Too many closing parens")
+      of IdentStartChars: some(parseSym(input, opt))
+      else: raise newException(UnexpectedCharacterError, fmt"Unexpected character {input.peekChar()}")
+  if ret.isNone: return ret
+  var binop = tryBinop(input, opt, ret.get)
+  while binop.isSome:
+    ret = binop
+    binop = tryBinop(input, opt, ret.get)
+  ret
 
 ## Returns none if the input stream is empty
 proc parse*(input: Stream): Option[Sexpr] =
