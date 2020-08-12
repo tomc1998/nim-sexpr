@@ -23,6 +23,18 @@ type
     ## It is implied that a character in this set is a 'force split char' - it
     ## does *not* need to be specified in forceSplitChars as well.
     binaryOpChars: HashSet[char]
+    ## Similar to binaryOpChars, but converts #x to (# x). Useful for & for
+    ## address-of operations, so you can write &int instead of (ref int) or
+    ## something.
+    ## In this case, a unary op does NOT count as a forceSplitChar, so if & is
+    ## a unary op char, abc&def is still a single identifier. On the other
+    ## hand, an identifier can no longer start with a char in unaryOpChars -
+    ## &asd will count as (& asd), not a single ident &asd.
+    ## Unary ops take precedence over binops, so &x * &y will be 
+    ## (* (& x) (& ## y)) 
+    ## rather than 
+    ## (& (* x (& y)))
+    unaryOpChars: HashSet[char]
   SexprKind* = enum
     skList
     skInt
@@ -72,12 +84,16 @@ proc withBinaryOpChar*(p: ParseOptions, c: char): ParseOptions =
   var p = p
   p.binaryOpChars.incl(c)
   p
+proc withUnaryOpChar*(p: ParseOptions, c: char): ParseOptions =
+  var p = p
+  p.unaryOpChars.incl(c)
+  p
 ## Return true if we should split on this char with the given parse options
 proc shouldSplitOn(p: ParseOptions, c: char): bool =
   p.forceSplitChars.contains(c) or p.binaryOpChars.contains(c)
 
-
 proc parse*(input: Stream, opt: ParseOptions): Option[Sexpr]
+proc parse*(input: Stream, opt: ParseOptions, lAssoc: bool): Option[Sexpr]
 
 proc consumeWhitespace(input: Stream, opt: ParseOptions) =
   while input.peekChar() in Whitespace:
@@ -190,25 +206,35 @@ proc tryBinop(input: Stream, opt: ParseOptions, lhs: Sexpr): Option[Sexpr] =
       rhs.get]))
   return none(Sexpr)
 
-## Returns none if the input stream is empty
-proc parse*(input: Stream, opt: ParseOptions): Option[Sexpr] =
+proc parseUnaryOp(input: Stream, opt: ParseOptions): Sexpr =
+  let unaryOp = Sexpr(line: 0, col: 0, kind: skSym, symVal: $input.readChar)
+  let target = parse(input, opt, true).get
+  Sexpr(line: 0, col: 0, kind: skList, listVal: @[unaryOp, target])
+
+## @param lAssoc - set to true to ignore any trailing binary ops. Useful for
+## unary ops, which take precedence over bin ops.
+proc parse*(input: Stream, opt: ParseOptions, lAssoc: bool): Option[Sexpr] =
   consumeWhitespace(input, opt)
+  let peek = input.peekChar()
   var ret =
-    case input.peekChar()
-      of '\0': none(Sexpr)
-      of '(': some(parseList(input, opt))
-      of Digits: some(parseNumber(input, opt))
-      of '"': some(parseString(input, opt))
-      of ')': raise newException(UnbalancedParensError, "Too many closing parens")
-      of IdentStartChars: some(parseSym(input, opt))
-      else: raise newException(UnexpectedCharacterError, fmt"Unexpected character {input.peekChar()}")
-  if ret.isNone: return ret
+    if peek in opt.unaryOpChars:
+      some(parseUnaryOp(input, opt))
+    else:
+      case input.peekChar()
+        of '\0': none(Sexpr)
+        of '(': some(parseList(input, opt))
+        of Digits: some(parseNumber(input, opt))
+        of '"': some(parseString(input, opt))
+        of ')': raise newException(UnbalancedParensError, "Too many closing parens")
+        of IdentStartChars: some(parseSym(input, opt))
+        else: raise newException(UnexpectedCharacterError, fmt"Unexpected character {input.peekChar()}")
+  if lAssoc or ret.isNone: return ret
   var binop = tryBinop(input, opt, ret.get)
   while binop.isSome:
     ret = binop
     binop = tryBinop(input, opt, ret.get)
   ret
-
+proc parse*(input: Stream, opt: ParseOptions): Option[Sexpr] = parse(input, opt, false)
 ## Returns none if the input stream is empty
 proc parse*(input: Stream): Option[Sexpr] =
   parse(input, initParseOptions())
