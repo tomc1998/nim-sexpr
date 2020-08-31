@@ -9,6 +9,26 @@ const IdentStartChars =
   strutils.IdentStartChars + {'+', '-', '*', '/', ';', ':', '`', '>', '<', '=', '!', '$', '%', '^', '?', '&', '.', '\''}
 const IdentChars = IdentStartChars + Digits
 
+type PosTrackStream = object
+  stream: Stream
+  currLine: int
+  currCol: int
+
+func initPosTrackStream(stream: Stream): PosTrackStream =
+  PosTrackStream(stream: stream, currLine: 1, currCol: 1)
+
+proc readChar(stream: var PosTrackStream): char =
+  result = stream.stream.readChar
+  case result
+  of '\n':
+    stream.currLine += 1
+    stream.currCol = 1
+  else: stream.currCol += 1
+proc peekChar(stream: var PosTrackStream): char = stream.stream.peekChar
+proc peek[T](stream: var PosTrackStream; res: var T) = stream.stream.peek(res)
+proc getPosition(stream: PosTrackStream): int = stream.stream.getPosition
+proc setPosition(stream: PosTrackStream, pos: int) = stream.stream.setPosition(pos)
+
 type 
   ParseOptions* = object
     ## A list of characters to force the parser to split on. For example, if
@@ -88,18 +108,18 @@ proc withUnaryOpChar*(p: ParseOptions, c: char): ParseOptions =
   var p = p
   p.unaryOpChars.incl(c)
   p
-## Return true if we should split on this char with the given parse options
+## Return true if we should split on this char with the given parseInternal options
 proc shouldSplitOn(p: ParseOptions, c: char): bool =
   p.forceSplitChars.contains(c) or p.binaryOpChars.contains(c)
 
-proc parse*(input: Stream, opt: ParseOptions): Option[Sexpr]
-proc parse*(input: Stream, opt: ParseOptions, lAssoc: bool): Option[Sexpr]
+proc parseInternal(input: var PosTrackStream, opt: ParseOptions, lAssoc: bool): Option[Sexpr]
+proc parseInternal(input: var PosTrackStream, opt: ParseOptions): Option[Sexpr]
 
-proc consumeWhitespace(input: Stream, opt: ParseOptions) =
+proc consumeWhitespace(input: var PosTrackStream, opt: ParseOptions) =
   while input.peekChar() in Whitespace:
     let _ = input.readChar()
 
-proc parseNumber(input: Stream, opt: ParseOptions): Sexpr =
+proc parseNumber(input: var PosTrackStream, opt: ParseOptions): Sexpr =
   var buf = ""
   var numPoints = 0
   type NumTy = enum
@@ -119,26 +139,26 @@ proc parseNumber(input: Stream, opt: ParseOptions): Sexpr =
   except IOError: discard
 
   while true:
-    let currChar = input.peekChar
-    case currChar
-    of Digits: buf.add(currChar)
+    let currCol = input.peekChar
+    case currCol
+    of Digits: buf.add(currCol)
     of {'a'..'f', 'A'..'F'}:
-      if numTy == ntHex: buf.add(currChar)
+      if numTy == ntHex: buf.add(currCol)
       else: break
     of '.':
       if numPoints < 1:
-        buf.add(currChar)
+        buf.add(currCol)
       numPoints += 1
     else: break
     let _ = input.readChar
-  if numPoints > 0: return Sexpr(line: 0, col: 0, kind: skFloat, floatVal: buf.parseFloat)
+  if numPoints > 0: return Sexpr(line: input.currLine, col: input.currCol, kind: skFloat, floatVal: buf.parseFloat)
   elif numTy == ntHex:
-    return Sexpr(line: 0, col: 0, kind: skInt, intVal: buf.parseHexInt)
+    return Sexpr(line: input.currLine, col: input.currCol, kind: skInt, intVal: buf.parseHexInt)
   elif numTy == ntBin:
-    return Sexpr(line: 0, col: 0, kind: skInt, intVal: buf.parseBinInt)
-  else: return Sexpr(line: 0, col: 0, kind: skInt, intVal: buf.parseInt)
+    return Sexpr(line: input.currLine, col: input.currCol, kind: skInt, intVal: buf.parseBinInt)
+  else: return Sexpr(line: input.currLine, col: input.currCol, kind: skInt, intVal: buf.parseInt)
 
-proc parseList(input: Stream, opt: ParseOptions): Sexpr =
+proc parseList(input: var PosTrackStream, opt: ParseOptions): Sexpr =
   assert input.readChar() == '('
   var sexprs = newSeq[Sexpr]()
   while true:
@@ -146,75 +166,76 @@ proc parseList(input: Stream, opt: ParseOptions): Sexpr =
     case input.peekChar
     of ')': break
     else:
-      let res = parse(input, opt)
+      let res = parseInternal(input, opt)
       if res.isNone: raise newException(UnbalancedParensError, "Not enough closing parens")
       sexprs.add(res.get)
   assert input.readChar == ')'
-  return Sexpr(line: 0, col: 0, kind: skList, listVal: sexprs)
+  return Sexpr(line: input.currLine, col: input.currCol, kind: skList, listVal: sexprs)
 
-proc parseSym(input: Stream, opt: ParseOptions): Sexpr =
+proc parseSym(input: var PosTrackStream, opt: ParseOptions): Sexpr =
   var buf = ""
   while true:
-    let currChar = input.peekChar
-    case currChar
+    let currCol = input.peekChar
+    case currCol
     of IdentChars:
       ## Check if we should split here
-      let splitChar = opt.shouldSplitOn(currChar)
+      let splitChar = opt.shouldSplitOn(currCol)
       if splitChar and buf.len > 0: break
       elif splitChar: # Just consume the single force split char
         buf.add(input.readChar)
         break
-      buf.add(currChar)
+      buf.add(currCol)
     else: break
     let _ = input.readChar
   assert buf.len > 0
   ## There's a special case, where a symbol is . followed by one or more
   ## numbers. If this is the case, actually return a float (e.g. ".5" == 0.5)
   if buf[0] == '.' and buf.len >= 2 and buf[1..^1].allIt(it in Digits):
-    return Sexpr(line: 0, col: 0, kind: skFloat, floatVal: buf.parseFloat)
+    return Sexpr(line: input.currLine, col: input.currCol, kind: skFloat, floatVal: buf.parseFloat)
   else:
-    return Sexpr(line: 0, col: 0, kind: skSym, symVal: buf)
+    return Sexpr(line: input.currLine, col: input.currCol, kind: skSym, symVal: buf)
 
-proc parseString(input: Stream, opt: ParseOptions): Sexpr =
+proc parseString(input: var PosTrackStream, opt: ParseOptions): Sexpr =
   assert input.readChar() == '"'
   var buf = ""
   while true:
-    let currChar = input.peekChar
-    case currChar
+    let currCol = input.peekChar
+    case currCol
     of '\\': raise newException(Exception, "Unimplemented escape chars")
     of '"': break
-    else: buf.add(currChar)
+    else: buf.add(currCol)
     let _ = input.readChar
-  return Sexpr(line: 0, col: 0, kind: skString, stringVal: buf)
+  return Sexpr(line: input.currLine, col: input.currCol, kind: skString, stringVal: buf)
 
 ## Peeks the next char after whitespace, if it's a binary op char, then wrap up
 ## lhs and return a listVal (# lhs rhs).
-proc tryBinop(input: Stream, opt: ParseOptions, lhs: Sexpr): Option[Sexpr] =
+proc tryBinop(input: var PosTrackStream, opt: ParseOptions, lhs: Sexpr): Option[Sexpr] =
   consumeWhitespace(input, opt)
   let peek = input.peekChar
   if opt.binaryOpChars.contains(peek):
     let _ = input.readChar
     ## Consume more here and return a (# a b) instead of a # b
     consumeWhitespace(input, opt)
-    let rhs = parse(input, opt)
+    let rhs = parseInternal(input, opt)
     if rhs.isNone:
       raise newException(IncompleteBinaryOpError,
         fmt"Expected value to complete the binary expression with operator '{peek}'")
-    return some(Sexpr(line: 0, col: 0, kind: skList, listVal: @[
-      Sexpr(line: 0, col: 0, kind: skSym, symVal: $peek),
+    return some(Sexpr(line: input.currLine, col: input.currCol, kind: skList, listVal: @[
+      Sexpr(line: input.currLine, col: input.currCol, kind: skSym, symVal: $peek),
       lhs,
       rhs.get]))
   return none(Sexpr)
 
-proc parseUnaryOp(input: Stream, opt: ParseOptions): Sexpr =
-  let unaryOp = Sexpr(line: 0, col: 0, kind: skSym, symVal: $input.readChar)
-  let target = parse(input, opt, true).get
-  Sexpr(line: 0, col: 0, kind: skList, listVal: @[unaryOp, target])
+proc parseUnaryOp(input: var PosTrackStream, opt: ParseOptions): Sexpr =
+  let unaryOp = Sexpr(line: input.currLine, col: input.currCol, kind: skSym, symVal: $input.readChar)
+  let target = parseInternal(input, opt, true).get
+  Sexpr(line: input.currLine, col: input.currCol, kind: skList, listVal: @[unaryOp, target])
 
 ## @param lAssoc - set to true to ignore any trailing binary ops. Useful for
 ## unary ops, which take precedence over bin ops.
-proc parse*(input: Stream, opt: ParseOptions, lAssoc: bool): Option[Sexpr] =
+proc parseInternal(input: var PosTrackStream, opt: ParseOptions, lAssoc: bool): Option[Sexpr] =
   consumeWhitespace(input, opt)
+  var (currLine, currCol) = (input.currLine, input.currCol)
   let peek = input.peekChar()
   var ret =
     if peek in opt.unaryOpChars:
@@ -229,12 +250,24 @@ proc parse*(input: Stream, opt: ParseOptions, lAssoc: bool): Option[Sexpr] =
         of IdentStartChars: some(parseSym(input, opt))
         else: raise newException(UnexpectedCharacterError, fmt"Unexpected character {input.peekChar()}")
   if lAssoc or ret.isNone: return ret
+  ret.get.line = currLine
+  ret.get.col = currCol
+  (currLine, currCol) = (input.currLine, input.currCol)
   var binop = tryBinop(input, opt, ret.get)
   while binop.isSome:
     ret = binop
+    ret.get.line = currLine
+    ret.get.col = currCol
     binop = tryBinop(input, opt, ret.get)
+    (currLine, currCol) = (input.currLine, input.currCol)
   ret
-proc parse*(input: Stream, opt: ParseOptions): Option[Sexpr] = parse(input, opt, false)
+
+proc parseInternal(input: var PosTrackStream, opt: ParseOptions): Option[Sexpr] =
+  input.parseInternal(opt, false)
+
 ## Returns none if the input stream is empty
-proc parse*(input: Stream): Option[Sexpr] =
-  parse(input, initParseOptions())
+proc parse*(input: Stream, opt: ParseOptions): Option[Sexpr] =
+  var pts = initPosTrackStream(input)
+  parseInternal(pts, opt, false)
+
+proc parse*(input: Stream): Option[Sexpr] = parse(input, initParseOptions())
