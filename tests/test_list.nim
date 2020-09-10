@@ -31,3 +31,12 @@ block:
   assert parse(newStringStream("(a . b . c)"), opt).get ==
     parse(newStringStream("(a.b.c)"), opt).get
 
+block:
+  let res = parse(newStringStream("[1 2 3]")).get
+  assert res.kind == skSquareList
+  assert res.squareListVal.len == 3
+  assert res.squareListVal.allIt(it.kind == skInt)
+  assert res.squareListVal[0].intVal == 1
+  assert res.squareListVal[1].intVal == 2
+  assert res.squareListVal[2].intVal == 3
+

@@ -57,6 +57,7 @@ type
     unaryOpChars: HashSet[char]
   SexprKind* = enum
     skList
+    skSquareList
     skInt
     skFloat
     skString
@@ -66,6 +67,7 @@ type
     col*: int
     case kind*: SexprKind
     of skList: listVal*: seq[Sexpr]
+    of skSquareList: squareListVal*: seq[Sexpr]
     of skInt: intVal*: int64
     of skFloat: floatVal*: float64
     of skString: stringVal*: string
@@ -80,6 +82,9 @@ proc toReadable*(s: Sexpr): string =
   of skList:
     let listItems = s.listVal.map(toReadable).join(" ")
     fmt"({listItems})"
+  of skSquareList:
+    let listItems = s.listVal.map(toReadable).join(" ")
+    fmt"[{listItems}]"
 
 proc `==`*(a: Sexpr, b: Sexpr): bool =
   if a.kind != b.kind: return false
@@ -89,6 +94,7 @@ proc `==`*(a: Sexpr, b: Sexpr): bool =
   of skString: a.stringVal == b.stringVal
   of skSym: a.symVal == b.symVal
   of skList: a.listVal == b.listVal
+  of skSquareList: a.squareListVal == b.squareListVal
 
 type UnbalancedParensError* = object of CatchableError
 type UnexpectedCharacterError* = object of CatchableError
@@ -158,19 +164,23 @@ proc parseNumber(input: var PosTrackStream, opt: ParseOptions): Sexpr =
     return Sexpr(line: input.currLine, col: input.currCol, kind: skInt, intVal: buf.parseBinInt)
   else: return Sexpr(line: input.currLine, col: input.currCol, kind: skInt, intVal: buf.parseInt)
 
-proc parseList(input: var PosTrackStream, opt: ParseOptions): Sexpr =
-  assert input.readChar() == '('
+proc parseList(input: var PosTrackStream, opt: ParseOptions, openChar: static[char], closeChar: static[char]): seq[Sexpr] =
+  assert input.readChar() == openChar
   var sexprs = newSeq[Sexpr]()
   while true:
     consumeWhitespace(input, opt)
     case input.peekChar
-    of ')': break
+    of closeChar: break
     else:
       let res = parseInternal(input, opt)
       if res.isNone: raise newException(UnbalancedParensError, "Not enough closing parens")
       sexprs.add(res.get)
-  assert input.readChar == ')'
-  return Sexpr(line: input.currLine, col: input.currCol, kind: skList, listVal: sexprs)
+  assert input.readChar == closeChar
+  return sexprs
+proc parseParenList(input: var PosTrackStream, opt: ParseOptions): Sexpr =
+  return Sexpr(line: input.currLine, col: input.currCol, kind: skList, listVal: parseList(input, opt, '(', ')'))
+proc parseSquareList(input: var PosTrackStream, opt: ParseOptions): Sexpr =
+  return Sexpr(line: input.currLine, col: input.currCol, kind: skSquareList, squareListVal: parseList(input, opt, '[', ']'))
 
 proc parseSym(input: var PosTrackStream, opt: ParseOptions): Sexpr =
   var buf = ""
@@ -243,10 +253,12 @@ proc parseInternal(input: var PosTrackStream, opt: ParseOptions, lAssoc: bool): 
     else:
       case input.peekChar()
         of '\0': none(Sexpr)
-        of '(': some(parseList(input, opt))
+        of '(': some(parseParenList(input, opt))
+        of '[': some(parseSquareList(input, opt))
         of Digits: some(parseNumber(input, opt))
         of '"': some(parseString(input, opt))
-        of ')': raise newException(UnbalancedParensError, "Too many closing parens")
+        of ')': raise newException(UnbalancedParensError, "Unexpected ')'")
+        of ']': raise newException(UnbalancedParensError, "Unexpected ']'")
         of IdentStartChars: some(parseSym(input, opt))
         else: raise newException(UnexpectedCharacterError, fmt"Unexpected character {input.peekChar()}")
   if lAssoc or ret.isNone: return ret
