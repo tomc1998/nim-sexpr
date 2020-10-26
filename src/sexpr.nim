@@ -100,6 +100,7 @@ type UnbalancedParensError* = object of CatchableError
 type UnexpectedCharacterError* = object of CatchableError
 ## For when a char in binaryOpChars is not followed by a valid sexpr
 type IncompleteBinaryOpError* = object of CatchableError
+type UnclosedStringError* = object of CatchableError
 
 proc initParseOptions*(): ParseOptions = ParseOptions(forceSplitChars: initHashSet[char]())
 proc withForceSplitChar*(p: ParseOptions, c: char): ParseOptions =
@@ -209,11 +210,15 @@ proc parseString(input: var PosTrackStream, opt: ParseOptions): Sexpr =
   assert input.readChar() == '"'
   var buf = ""
   while true:
-    let currCol = input.peekChar
-    case currCol
+    let currChar = input.peekChar
+    case currChar
     of '\\': raise newException(Exception, "Unimplemented escape chars")
-    of '"': break
-    else: buf.add(currCol)
+    of '"': 
+      let _ = input.readChar
+      break
+    of '\0':
+      raise newException(UnclosedStringError, "Expected closing '\"', found EOF")
+    else: buf.add(currChar)
     let _ = input.readChar
   return Sexpr(line: input.currLine, col: input.currCol, kind: skString, stringVal: buf)
 
