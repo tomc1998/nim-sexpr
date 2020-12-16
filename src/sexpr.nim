@@ -231,7 +231,7 @@ proc tryBinop(input: var PosTrackStream, opt: ParseOptions, lhs: Sexpr): Option[
     let _ = input.readChar
     ## Consume more here and return a (# a b) instead of a # b
     consumeWhitespace(input, opt)
-    let rhs = parseInternal(input, opt)
+    let rhs = parseInternal(input, opt, true)
     if rhs.isNone:
       raise newException(IncompleteBinaryOpError,
         fmt"Expected value to complete the binary expression with operator '{peek}'")
@@ -275,8 +275,8 @@ proc parseInternal(input: var PosTrackStream, opt: ParseOptions, lAssoc: bool): 
     ret = binop
     ret.get.line = currLine
     ret.get.col = currCol
-    binop = tryBinop(input, opt, ret.get)
     (currLine, currCol) = (input.currLine, input.currCol)
+    binop = tryBinop(input, opt, ret.get)
   ret
 
 proc parseInternal(input: var PosTrackStream, opt: ParseOptions): Option[Sexpr] =
